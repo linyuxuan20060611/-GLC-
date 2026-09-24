@@ -1,0 +1,144 @@
+from pathlib import Path
+import rasterio
+from rasterio.merge import merge
+
+# GLC_FCS30D 原始数据所在文件夹
+glc_dir = Path(
+    r"C:\Users\linyu\Desktop\科研\GLC_FCS30D数据\E110-E115"
+)
+
+# 输出文件夹
+work_dir = glc_dir / "处理结果"
+extract_dir = work_dir / "GLC_2010_tiles"
+
+work_dir.mkdir(exist_ok=True)
+extract_dir.mkdir(exist_ok=True)
+
+# 查找所有 Annual.tif 文件
+files = sorted(glc_dir.rglob("*_Annual.tif"))
+
+if not files:
+    raise FileNotFoundError(
+        f"在以下文件夹中没有找到 Annual.tif 文件：\n{glc_dir}"
+    )
+
+print("找到以下文件：")
+for file in files:
+    print(file)
+
+# 2000—2022 年，每年一个波段
+year = 2010
+first_year = 2000
+band_index = year - first_year + 1
+
+print(f"\n2010 年对应第 {band_index} 个波段")
+
+# 第一步：提取每个分幅的 2010 年波段
+for input_path in files:
+
+    with rasterio.open(input_path) as src:
+
+        print(
+            f"\n正在处理：{input_path.name}"
+        )
+        print("波段数：", src.count)
+        print("坐标系：", src.crs)
+        print("分辨率：", src.res)
+
+        if src.count < band_index:
+            raise ValueError(
+                f"{input_path.name} 的波段数不足，"
+                f"无法读取第 {band_index} 波段"
+            )
+
+        # 读取第 11 波段
+        data = src.read(band_index)
+
+        profile = src.profile.copy()
+
+        profile.update(
+            driver="GTiff",
+            count=1,
+            dtype=data.dtype,
+            height=src.height,
+            width=src.width,
+            transform=src.transform,
+            compress="lzw"
+        )
+
+        output_path = extract_dir / f"{input_path.stem}_2010.tif"
+
+        with rasterio.open(output_path, "w", **profile) as dst:
+            dst.write(data, 1)
+
+        print("已生成：", output_path)
+
+# 第二步：拼接所有 2010 年分幅
+tile_files = sorted(extract_dir.glob("*_2010.tif"))
+
+if not tile_files:
+    raise FileNotFoundError(
+        "没有找到提取后的 2010 年栅格文件"
+    )
+
+srcs = [rasterio.open(path) for path in tile_files]
+
+try:
+    reference = srcs[0]
+
+    # 检查坐标系和分辨率是否一致
+    for src in srcs[1:]:
+        if src.crs != reference.crs:
+            raise ValueError(
+                f"{src.name} 的坐标系与其他文件不一致"
+            )
+
+        if src.res != reference.res:
+            raise ValueError(
+                f"{src.name} 的像元大小与其他文件不一致"
+            )
+
+    mosaic, mosaic_transform = merge(
+        srcs,
+        indexes=1,
+        method="first"
+    )
+
+    mosaic_profile = reference.profile.copy()
+
+    mosaic_profile.update(
+        driver="GTiff",
+        count=1,
+        height=mosaic.shape[1],
+        width=mosaic.shape[2],
+        transform=mosaic_transform,
+        compress="lzw"
+    )
+
+    mosaic_path = work_dir / "GLC_2010_E110_E115_mosaic.tif"
+
+    with rasterio.open(
+        mosaic_path,
+        "w",
+        **mosaic_profile
+    ) as dst:
+        dst.write(mosaic)
+
+    print("\n拼接完成：")
+    print(mosaic_path)
+
+finally:
+    for src in srcs:
+        src.close()
+
+# 第三步：检查最终结果
+with rasterio.open(mosaic_path) as src:
+    print("\n最终结果信息：")
+    print("波段数：", src.count)
+    print("行数：", src.height)
+    print("列数：", src.width)
+    print("坐标系：", src.crs)
+    print("分辨率：", src.res)
+    print("空间范围：", src.bounds)
+    print("数据类型：", src.dtypes)
+    print("NoData：", src.nodata)
