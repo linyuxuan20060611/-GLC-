@@ -4,11 +4,11 @@ from rasterio.merge import merge
 
 # GLC_FCS30D 原始数据所在文件夹
 glc_dir = Path(
-    r"C:\Users\linyu\Desktop\科研\GLC_FCS30D数据\E110-E115"
+    r"C:\Users\linyu\Desktop\科研\GLC_FCS30D数据\E100-E105"
 )
 
 # 输出文件夹
-work_dir = glc_dir / "处理结果"
+work_dir = glc_dir / "2010年处理结果"
 extract_dir = work_dir / "GLC_2010_tiles"
 
 work_dir.mkdir(exist_ok=True)
@@ -74,34 +74,58 @@ for input_path in files:
         print("已生成：", output_path)
 
 # 第二步：拼接所有 2010 年分幅
+from pathlib import Path
+import rasterio
+from rasterio.merge import merge
+from rasterio.enums import Resampling
+
+glc_dir = Path(
+    r"C:\Users\linyu\Desktop\科研\GLC_FCS30D数据\E100-E105"
+)
+
+work_dir = glc_dir / "2010年处理结果"
+extract_dir = work_dir / "GLC_2010_tiles"
+
 tile_files = sorted(extract_dir.glob("*_2010.tif"))
 
 if not tile_files:
     raise FileNotFoundError(
-        "没有找到提取后的 2010 年栅格文件"
+        f"没有找到 2010 年栅格文件：{extract_dir}"
     )
 
+print("准备拼接的文件：")
+for file in tile_files:
+    with rasterio.open(file) as src:
+        print(
+            file.name,
+            "分辨率 =", src.res,
+            "坐标系 =", src.crs,
+            "大小 =", src.width, src.height
+        )
+
+# 打开所有分幅
 srcs = [rasterio.open(path) for path in tile_files]
 
 try:
     reference = srcs[0]
 
-    # 检查坐标系和分辨率是否一致
+    # 坐标系必须一致
     for src in srcs[1:]:
         if src.crs != reference.crs:
             raise ValueError(
                 f"{src.name} 的坐标系与其他文件不一致"
             )
 
-        if src.res != reference.res:
-            raise ValueError(
-                f"{src.name} 的像元大小与其他文件不一致"
-            )
+    # 以第一个文件的分辨率作为统一目标分辨率
+    target_resolution = reference.res
 
     mosaic, mosaic_transform = merge(
         srcs,
         indexes=1,
-        method="first"
+        res=target_resolution,
+        resampling=Resampling.nearest,
+        method="first",
+        target_aligned_pixels=True
     )
 
     mosaic_profile = reference.profile.copy()
@@ -115,7 +139,7 @@ try:
         compress="lzw"
     )
 
-    mosaic_path = work_dir / "GLC_2010_E110_E115_mosaic.tif"
+    mosaic_path = work_dir / "GLC_2010_E100_E105_mosaic.tif"
 
     with rasterio.open(
         mosaic_path,
@@ -130,15 +154,3 @@ try:
 finally:
     for src in srcs:
         src.close()
-
-# 第三步：检查最终结果
-with rasterio.open(mosaic_path) as src:
-    print("\n最终结果信息：")
-    print("波段数：", src.count)
-    print("行数：", src.height)
-    print("列数：", src.width)
-    print("坐标系：", src.crs)
-    print("分辨率：", src.res)
-    print("空间范围：", src.bounds)
-    print("数据类型：", src.dtypes)
-    print("NoData：", src.nodata)
